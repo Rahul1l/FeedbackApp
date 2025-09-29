@@ -1,161 +1,79 @@
 import streamlit as st
-from pymongo import MongoClient
 import pandas as pd
-import altair as alt
+import os
 from datetime import datetime
 
-# ---------------------------
-# MongoDB connection
-# ---------------------------
-MONGO_URI = st.secrets["MONGO_URI"]
-client = MongoClient(MONGO_URI)
-db = client["feedbackdb"]        # your database
-collection = db["feedbacks"]     # feedback collection
+# File to store feedbacks
+FEEDBACK_FILE = "feedback_data.csv"
 
-# ---------------------------
-# Helper functions
-# ---------------------------
-def save_feedback(data):
-    """Insert feedback with timestamp"""
-    data["timestamp"] = datetime.now()
-    collection.insert_one(data)
+# Ensure feedback file exists
+if not os.path.exists(FEEDBACK_FILE):
+    df = pd.DataFrame(columns=["Trainer", "Date", "Q1", "Q2", "Q3", "Comments"])
+    df.to_csv(FEEDBACK_FILE, index=False)
 
-def get_all_trainers():
-    """Return a list of unique trainers"""
-    return collection.distinct("trainer")
+# Load existing feedback data
+def load_data():
+    return pd.read_csv(FEEDBACK_FILE)
 
-def get_feedback_by_trainer(trainer_name):
-    """Return all feedbacks for a trainer"""
-    return list(collection.find({"trainer": trainer_name}))
+# Save new feedback
+def save_feedback(trainer, q1, q2, q3, comments):
+    df = load_data()
+    new_entry = {
+        "Trainer": trainer,
+        "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Q1": q1,
+        "Q2": q2,
+        "Q3": q3,
+        "Comments": comments
+    }
+    df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+    df.to_csv(FEEDBACK_FILE, index=False)
 
-def export_feedback_to_excel(trainer_name):
-    """Export feedback to Excel"""
-    feedbacks = get_feedback_by_trainer(trainer_name)
-    if not feedbacks:
-        return None
-    df = pd.DataFrame(feedbacks)
-    # Drop MongoDB _id column
-    if "_id" in df.columns:
-        df = df.drop(columns=["_id"])
-    file_name = f"{trainer_name}_feedback.xlsx"
-    df.to_excel(file_name, index=False)
-    return file_name
+# --- Streamlit App ---
+st.title("Trainer Feedback Form")
 
-def run_analytics(trainer_name):
-    """Aggregate and visualize analytics for a trainer"""
-    feedbacks = get_feedback_by_trainer(trainer_name)
-    if not feedbacks:
-        st.warning("No feedback available for this trainer.")
-        return
+mode = st.radio("Select Mode", ["User", "Admin"], horizontal=True)
+
+if mode == "User":
+    st.header("Submit Feedback")
     
-    df = pd.DataFrame(feedbacks)
-    questions = ["q1", "q2", "q3", "q4"]
-    q_labels = ["Training Delivery Quality",
-                "Understandability",
-                "Relevance of Topics",
-                "Wish to continue with same trainer?"]
-    
-    # Compute average scores
-    avg_scores = {label: df[q].mean() for label, q in zip(q_labels, questions)}
-    
-    # Display as bar chart
-    chart_data = pd.DataFrame({
-        "Question": list(avg_scores.keys()),
-        "Average Score": list(avg_scores.values())
-    })
-    
-    chart = alt.Chart(chart_data).mark_bar().encode(
-        x=alt.X("Question", sort=None),
-        y="Average Score",
-        tooltip=["Question", "Average Score"]
-    ).properties(title=f"Average Feedback Scores for {trainer_name}")
-    
-    st.altair_chart(chart, use_container_width=True)
+    trainer_list = load_data()["Trainer"].unique().tolist()
+    trainer_name = st.text_input("Trainer Name (Enter New or Select Existing)")
 
-# ---------------------------
-# Pages
-# ---------------------------
-page = st.sidebar.selectbox("Select Page", ["User Feedback", "Admin Login"])
+    st.write("Rate from 1 (Poor) to 5 (Excellent)")
+    q1 = st.radio("Trainer Knowledge:", [1, 2, 3, 4, 5], horizontal=True)
+    q2 = st.radio("Communication Skills:", [1, 2, 3, 4, 5], horizontal=True)
+    q3 = st.radio("Engagement Level:", [1, 2, 3, 4, 5], horizontal=True)
+    comments = st.text_area("Additional Comments:")
 
-# ---------------------------
-# User Feedback Page
-# ---------------------------
-if page == "User Feedback":
-    st.title("Trainer Feedback Form")
-    
-    with st.form("feedback_form"):
-        trainer_name = st.text_input("Trainer Name")
-        subject = st.text_input("Subject")
-        hours = st.number_input("Training Hours", min_value=0, step=1)
-        
-        q1 = st.radio("Training Delivery Quality", list(range(11)))
-        q2 = st.radio("How Understandable was the training?", list(range(11)))
-        q3 = st.radio("How Relevant were the topics covered?", list(range(11)))
-        q4 = st.radio("Wish to continue with same trainer?", list(range(11)))
-        
-        comments = st.text_area("Additional Comments")
-        
-        submitted = st.form_submit_button("Submit Feedback")
-        if submitted:
-            feedback_data = {
-                "trainer": trainer_name,
-                "subject": subject,
-                "hours": hours,
-                "q1": q1,
-                "q2": q2,
-                "q3": q3,
-                "q4": q4,
-                "comments": comments
-            }
-            save_feedback(feedback_data)
-            st.success("Feedback submitted successfully!")
-
-# ---------------------------
-# Admin Login Page
-# ---------------------------
-elif page == "Admin Login":
-    st.title("Admin Login")
-    password = st.text_input("Enter Admin Password", type="password")
-    if st.button("Login"):
-        if password == st.secrets["ADMIN_PASSWORD"]:
-            st.success("Login Successful!")
-            
-            # Admin actions
-            st.subheader("Feedback Overview")
-            trainers = get_all_trainers()
-            trainer_selected = st.selectbox("Select Trainer", ["--Select--"] + trainers)
-            
-            if trainer_selected != "--Select--":
-                feedbacks = get_feedback_by_trainer(trainer_selected)
-                st.write(f"Total Feedbacks: {len(feedbacks)}")
-                
-                # Show each feedback with timestamp
-                for fb in feedbacks:
-                    st.markdown("---")
-                    st.write(f"**Submitted on:** {fb['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
-                    st.write(f"**Subject:** {fb['subject']}")
-                    st.write(f"**Training Hours:** {fb['hours']}")
-                    st.write(f"**Q1:** {fb['q1']}")
-                    st.write(f"**Q2:** {fb['q2']}")
-                    st.write(f"**Q3:** {fb['q3']}")
-                    st.write(f"**Q4:** {fb['q4']}")
-                    st.write(f"**Comments:** {fb['comments']}")
-                
-                # Admin buttons
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button("Export to Excel", key=f"export_{trainer_selected}"):
-                        file_path = export_feedback_to_excel(trainer_selected)
-                        if file_path:
-                            st.success(f"Feedback exported to {file_path}")
-                with col2:
-                    if st.button("Delete All Feedbacks", key=f"delete_{trainer_selected}"):
-                        collection.delete_many({"trainer": trainer_selected})
-                        st.warning(f"All feedbacks for {trainer_selected} deleted!")
-                        st.experimental_rerun()
-                with col3:
-                    if st.button("Run Analytics", key=f"analytics_{trainer_selected}"):
-                        run_analytics(trainer_selected)
-                        
+    if st.button("Submit Feedback"):
+        if trainer_name.strip() == "":
+            st.error("Please enter trainer name!")
         else:
-            st.error("Incorrect Password!")
+            save_feedback(trainer_name.strip(), q1, q2, q3, comments.strip())
+            st.success("Feedback submitted successfully!")
+            st.experimental_rerun()  # Refresh page for next user
+
+elif mode == "Admin":
+    st.header("View Feedback & Analytics")
+    df = load_data()
+
+    if df.empty:
+        st.info("No feedback data available.")
+    else:
+        trainers = df["Trainer"].unique().tolist()
+        selected_trainer = st.selectbox("Select Trainer", trainers)
+
+        if selected_trainer:
+            trainer_data = df[df["Trainer"] == selected_trainer]
+            st.subheader(f"All Feedback for {selected_trainer}")
+            st.dataframe(trainer_data)
+
+            # Analytics
+            st.subheader("Analytics")
+            avg_q1 = trainer_data["Q1"].mean()
+            avg_q2 = trainer_data["Q2"].mean()
+            avg_q3 = trainer_data["Q3"].mean()
+            st.write(f"Average Trainer Knowledge: {avg_q1:.2f}")
+            st.write(f"Average Communication Skills: {avg_q2:.2f}")
+            st.write(f"Average Engagement Level: {avg_q3:.2f}")
