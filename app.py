@@ -40,21 +40,33 @@ st.title("Trainer Feedback Form")
 
 mode = st.radio("Select Mode", ["User", "Admin"], horizontal=True)
 
+# --- Session state initialization for User form ---
+if "trainer_name" not in st.session_state:
+    st.session_state.trainer_name = ""
+    st.session_state.subject_name = ""
+    st.session_state.subject_hours = 1
+    st.session_state.q1 = 1
+    st.session_state.q2 = 1
+    st.session_state.q3 = 1
+    st.session_state.request_repeat = "Yes"
+    st.session_state.comments = ""
+
 if mode == "User":
     st.header("Submit Feedback")
 
-    # Input fields
-    trainer_name = st.text_input("Trainer Name (Enter New or Select Existing)")
-    subject_name = st.text_input("Subject Name")
-    subject_hours = st.number_input("Subject Hours", min_value=1, max_value=100, step=1)
+    # Input fields with session state
+    trainer_name = st.text_input("Trainer Name", value=st.session_state.trainer_name)
+    subject_name = st.text_input("Subject Name", value=st.session_state.subject_name)
+    subject_hours = st.number_input("Subject Hours", min_value=1, max_value=100, step=1, value=st.session_state.subject_hours)
 
     st.write("Rate from 1 (Poor) to 5 (Excellent)")
-    q1 = st.radio("Trainer Knowledge:", [1, 2, 3, 4, 5], horizontal=True)
-    q2 = st.radio("Communication Skills:", [1, 2, 3, 4, 5], horizontal=True)
-    q3 = st.radio("Engagement Level:", [1, 2, 3, 4, 5], horizontal=True)
+    q1 = st.radio("Trainer Knowledge:", [1, 2, 3, 4, 5], horizontal=True, index=st.session_state.q1-1)
+    q2 = st.radio("Communication Skills:", [1, 2, 3, 4, 5], horizontal=True, index=st.session_state.q2-1)
+    q3 = st.radio("Engagement Level:", [1, 2, 3, 4, 5], horizontal=True, index=st.session_state.q3-1)
 
-    request_repeat = st.radio("Would you like this trainer again?", ["Yes", "No"], horizontal=True)
-    comments = st.text_area("Additional Comments:")
+    request_repeat = st.radio("Would you like this trainer again?", ["Yes", "No"], horizontal=True,
+                              index=0 if st.session_state.request_repeat=="Yes" else 1)
+    comments = st.text_area("Additional Comments:", value=st.session_state.comments)
 
     if st.button("Submit Feedback"):
         if trainer_name.strip() == "" or subject_name.strip() == "":
@@ -65,7 +77,16 @@ if mode == "User":
                 q1, q2, q3, request_repeat, comments.strip()
             )
             st.success("Feedback submitted successfully!")
-            st.experimental_rerun()  # Refresh page for next user
+
+            # Reset session state for new user
+            st.session_state.trainer_name = ""
+            st.session_state.subject_name = ""
+            st.session_state.subject_hours = 1
+            st.session_state.q1 = 1
+            st.session_state.q2 = 1
+            st.session_state.q3 = 1
+            st.session_state.request_repeat = "Yes"
+            st.session_state.comments = ""
 
 elif mode == "Admin":
     st.header("View Feedback & Analytics")
