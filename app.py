@@ -1,191 +1,161 @@
-# app.py
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
 import altair as alt
-from io import BytesIO
 from datetime import datetime
-import re
-from collections import Counter
 
-# -------------------------------
-# MongoDB Atlas via connection string
-# -------------------------------
+# ---------------------------
+# MongoDB connection
+# ---------------------------
 MONGO_URI = st.secrets["MONGO_URI"]
-ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
-
 client = MongoClient(MONGO_URI)
-db = client.get_default_database()  # feedbackdb
-collection = db["feedbacks"]
+db = client["feedbackdb"]        # your database
+collection = db["feedbacks"]     # feedback collection
 
-# -------------------------------
+# ---------------------------
 # Helper functions
-# -------------------------------
-def save_feedback(doc: dict):
-    doc["submitted_at"] = datetime.utcnow()
-    result = collection.insert_one(doc)
-    return str(result.inserted_id)
+# ---------------------------
+def save_feedback(data):
+    """Insert feedback with timestamp"""
+    data["timestamp"] = datetime.now()
+    collection.insert_one(data)
 
-def fetch_feedbacks(limit=1000):
-    docs = list(collection.find().sort("submitted_at",-1).limit(limit))
-    for d in docs:
-        d["_id"] = str(d["_id"])
-    return docs
+def get_all_trainers():
+    """Return a list of unique trainers"""
+    return collection.distinct("trainer")
 
-def get_feedback_by_id(id_str: str):
-    from bson import ObjectId
-    try:
-        doc = collection.find_one({"_id": ObjectId(id_str)})
-        if doc:
-            doc["_id"] = str(doc["_id"])
-        return doc
-    except:
+def get_feedback_by_trainer(trainer_name):
+    """Return all feedbacks for a trainer"""
+    return list(collection.find({"trainer": trainer_name}))
+
+def export_feedback_to_excel(trainer_name):
+    """Export feedback to Excel"""
+    feedbacks = get_feedback_by_trainer(trainer_name)
+    if not feedbacks:
         return None
+    df = pd.DataFrame(feedbacks)
+    # Drop MongoDB _id column
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+    file_name = f"{trainer_name}_feedback.xlsx"
+    df.to_excel(file_name, index=False)
+    return file_name
 
-def delete_feedback(id_str: str):
-    from bson import ObjectId
-    result = collection.delete_one({"_id": ObjectId(id_str)})
-    return result.deleted_count == 1
+def run_analytics(trainer_name):
+    """Aggregate and visualize analytics for a trainer"""
+    feedbacks = get_feedback_by_trainer(trainer_name)
+    if not feedbacks:
+        st.warning("No feedback available for this trainer.")
+        return
+    
+    df = pd.DataFrame(feedbacks)
+    questions = ["q1", "q2", "q3", "q4"]
+    q_labels = ["Training Delivery Quality",
+                "Understandability",
+                "Relevance of Topics",
+                "Wish to continue with same trainer?"]
+    
+    # Compute average scores
+    avg_scores = {label: df[q].mean() for label, q in zip(q_labels, questions)}
+    
+    # Display as bar chart
+    chart_data = pd.DataFrame({
+        "Question": list(avg_scores.keys()),
+        "Average Score": list(avg_scores.values())
+    })
+    
+    chart = alt.Chart(chart_data).mark_bar().encode(
+        x=alt.X("Question", sort=None),
+        y="Average Score",
+        tooltip=["Question", "Average Score"]
+    ).properties(title=f"Average Feedback Scores for {trainer_name}")
+    
+    st.altair_chart(chart, use_container_width=True)
 
-def feedbacks_to_excel_bytes(df: pd.DataFrame, sheet_name="feedbacks"):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        writer.save()
-    return output.getvalue()
+# ---------------------------
+# Pages
+# ---------------------------
+page = st.sidebar.selectbox("Select Page", ["User Feedback", "Admin Login"])
 
-def check_admin_password(pw: str):
-    return pw == ADMIN_PASSWORD
-
-# -------------------------------
-# Streamlit UI
-# -------------------------------
-st.set_page_config(page_title="Feedback Analysis App", layout="wide")
-st.title("Feedback Analysis App")
-
-menu = st.sidebar.selectbox("Navigation", ["Submit Feedback", "Admin"])
-
-# ---------------- User Form ----------------
-if menu == "Submit Feedback":
-    st.header("Submit Trainer Feedback")
+# ---------------------------
+# User Feedback Page
+# ---------------------------
+if page == "User Feedback":
+    st.title("Trainer Feedback Form")
+    
     with st.form("feedback_form"):
-        trainer = st.text_input("Trainer Name", placeholder="Enter trainer full name")
-        subject = st.text_input("Subject / Topic", placeholder="E.g., Python for Data Analysis")
-        duration = st.number_input("Duration (hours)", min_value=0.0, step=0.5, value=1.0)
-
-        st.markdown("### Rate the trainer (0 = lowest, 10 = highest)")
-        q1 = st.radio("1) Training delivery quality", options=list(range(0,11)), index=8, horizontal=True)
-        q2 = st.radio("2) How understandable was the training?", options=list(range(0,11)), index=8, horizontal=True)
-        q3 = st.radio("3) How relevant were the topics covered?", options=list(range(0,11)), index=8, horizontal=True)
-        q4 = st.radio("4) Wish to continue with the same trainer?", options=list(range(0,11)), index=8, horizontal=True)
-
-        comments = st.text_area("Comments (optional)", placeholder="Write your feedback here...")
-
+        trainer_name = st.text_input("Trainer Name")
+        subject = st.text_input("Subject")
+        hours = st.number_input("Training Hours", min_value=0, step=1)
+        
+        q1 = st.radio("Training Delivery Quality", list(range(11)))
+        q2 = st.radio("How Understandable was the training?", list(range(11)))
+        q3 = st.radio("How Relevant were the topics covered?", list(range(11)))
+        q4 = st.radio("Wish to continue with same trainer?", list(range(11)))
+        
+        comments = st.text_area("Additional Comments")
+        
         submitted = st.form_submit_button("Submit Feedback")
-
-    if submitted:
-        if not trainer.strip():
-            st.warning("Please enter trainer name.")
-        else:
-            doc = {
-                "trainer": trainer.strip(),
-                "subject": subject.strip(),
-                "duration_hours": float(duration),
-                "q1_delivery_quality": int(q1),
-                "q2_understandable": int(q2),
-                "q3_relevance": int(q3),
-                "q4_continue": int(q4),
-                "comments": comments.strip()
+        if submitted:
+            feedback_data = {
+                "trainer": trainer_name,
+                "subject": subject,
+                "hours": hours,
+                "q1": q1,
+                "q2": q2,
+                "q3": q3,
+                "q4": q4,
+                "comments": comments
             }
-            inserted_id = save_feedback(doc)
-            st.success("Thank you — your feedback has been recorded.")
-            st.write("Reference ID:", inserted_id)
+            save_feedback(feedback_data)
+            st.success("Feedback submitted successfully!")
 
-# ---------------- Admin ----------------
-else:
-    st.header("Admin Portal")
-    if "admin_logged_in" not in st.session_state:
-        st.session_state["admin_logged_in"] = False
-
-    if not st.session_state["admin_logged_in"]:
-        st.subheader("Login")
-        pw = st.text_input("Admin password", type="password")
-        if st.button("Login"):
-            if check_admin_password(pw):
-                st.session_state["admin_logged_in"] = True
-                st.experimental_rerun()
-            else:
-                st.error("Invalid password.")
-        st.stop()
-
-    st.sidebar.success("Logged in as admin")
-    col1, col2 = st.columns([3,1])
-    with col1:
-        search_trainer = st.text_input("Filter by trainer name (contains)", value="")
-    with col2:
-        refresh = st.button("Refresh list")
-
-    all_docs = fetch_feedbacks(limit=2000)
-    if search_trainer.strip():
-        filtered = [d for d in all_docs if search_trainer.strip().lower() in d.get("trainer","").lower()]
-    else:
-        filtered = all_docs
-
-    st.write(f"Showing {len(filtered)} feedback(s)")
-
-    def show_table(docs):
-        if not docs:
-            st.info("No feedbacks found.")
-            return
-        df = pd.DataFrame([{
-            "id": d["_id"],
-            "trainer": d.get("trainer",""),
-            "subject": d.get("subject",""),
-            "duration_hours": d.get("duration_hours",""),
-            "q1": d.get("q1_delivery_quality", ""),
-            "q2": d.get("q2_understandable", ""),
-            "q3": d.get("q3_relevance", ""),
-            "q4": d.get("q4_continue", ""),
-            "comments": d.get("comments",""),
-            "submitted_at": d.get("submitted_at")
-        } for d in docs])
-        st.dataframe(df[["id","trainer","subject","duration_hours","q1","q2","q3","q4","submitted_at"]], height=300)
-        return df
-
-    df_all = show_table(filtered)
-
-    st.write("---")
-    st.subheader("Feedback management")
-    id_to_view = st.text_input("Enter feedback id to view details")
-
-    with st.expander("Click an ID to load it"):
-        for d in filtered[:200]:
-            st.write(f"- **{d['_id']}**  — {d.get('trainer','')} — {d.get('subject','')} — {d.get('submitted_at')}")
-
-    if id_to_view.strip():
-        doc = get_feedback_by_id(id_to_view.strip())
-        if not doc:
-            st.error("Feedback not found for that ID.")
+# ---------------------------
+# Admin Login Page
+# ---------------------------
+elif page == "Admin Login":
+    st.title("Admin Login")
+    password = st.text_input("Enter Admin Password", type="password")
+    if st.button("Login"):
+        if password == st.secrets["ADMIN_PASSWORD"]:
+            st.success("Login Successful!")
+            
+            # Admin actions
+            st.subheader("Feedback Overview")
+            trainers = get_all_trainers()
+            trainer_selected = st.selectbox("Select Trainer", ["--Select--"] + trainers)
+            
+            if trainer_selected != "--Select--":
+                feedbacks = get_feedback_by_trainer(trainer_selected)
+                st.write(f"Total Feedbacks: {len(feedbacks)}")
+                
+                # Show each feedback with timestamp
+                for fb in feedbacks:
+                    st.markdown("---")
+                    st.write(f"**Submitted on:** {fb['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                    st.write(f"**Subject:** {fb['subject']}")
+                    st.write(f"**Training Hours:** {fb['hours']}")
+                    st.write(f"**Q1:** {fb['q1']}")
+                    st.write(f"**Q2:** {fb['q2']}")
+                    st.write(f"**Q3:** {fb['q3']}")
+                    st.write(f"**Q4:** {fb['q4']}")
+                    st.write(f"**Comments:** {fb['comments']}")
+                
+                # Admin buttons
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button("Export to Excel", key=f"export_{trainer_selected}"):
+                        file_path = export_feedback_to_excel(trainer_selected)
+                        if file_path:
+                            st.success(f"Feedback exported to {file_path}")
+                with col2:
+                    if st.button("Delete All Feedbacks", key=f"delete_{trainer_selected}"):
+                        collection.delete_many({"trainer": trainer_selected})
+                        st.warning(f"All feedbacks for {trainer_selected} deleted!")
+                        st.experimental_rerun()
+                with col3:
+                    if st.button("Run Analytics", key=f"analytics_{trainer_selected}"):
+                        run_analytics(trainer_selected)
+                        
         else:
-            st.markdown("### Feedback detail")
-            st.write(f"**Trainer:** {doc.get('trainer')}")
-            st.write(f"**Subject:** {doc.get('subject')}")
-            st.write(f"**Duration (hours):** {doc.get('duration_hours')}")
-            st.write("**Ratings:**")
-            st.write(f"- Delivery quality (Q1): {doc.get('q1_delivery_quality')}")
-            st.write(f"- Understandable (Q2): {doc.get('q2_understandable')}")
-            st.write(f"- Relevance (Q3): {doc.get('q3_relevance')}")
-            st.write(f"- Continue (Q4): {doc.get('q4_continue')}")
-            st.write("**Comments:**")
-            st.write(doc.get("comments","(none)"))
-
-            if st.button("Delete this feedback"):
-                if delete_feedback(id_to_view.strip()):
-                    st.success("Feedback deleted.")
-                else:
-                    st.error("Failed to delete feedback.")
-
-            if st.button("Export this feedback to Excel"):
-                df_doc = pd.DataFrame([doc])
-                xlsx_bytes = feedbacks_to_excel_bytes(df_doc, sheet_name="feedback")
-                st.download_button("Download Excel", xlsx_bytes, file_name=f"feedback_{doc['_id']}.xlsx")
+            st.error("Incorrect Password!")
