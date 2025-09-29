@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+from io import BytesIO
 
 # File to store feedbacks
 FEEDBACK_FILE = "feedback_data.csv"
@@ -9,7 +10,7 @@ FEEDBACK_FILE = "feedback_data.csv"
 # Ensure feedback file exists
 if not os.path.exists(FEEDBACK_FILE):
     df = pd.DataFrame(columns=[
-        "Trainer", "Subject", "Hours", "Date", 
+        "Trainer", "Subject", "Hours", "Date",
         "Q1", "Q2", "Q3", "Request_Repeat", "Comments"
     ])
     df.to_csv(FEEDBACK_FILE, index=False)
@@ -40,7 +41,7 @@ st.title("Trainer Feedback Form")
 
 mode = st.radio("Select Mode", ["User", "Admin"], horizontal=True)
 
-# --- Session state initialization for User form ---
+# --- Session state for User form ---
 if "trainer_name" not in st.session_state:
     st.session_state.trainer_name = ""
     st.session_state.subject_name = ""
@@ -51,10 +52,10 @@ if "trainer_name" not in st.session_state:
     st.session_state.request_repeat = "Yes"
     st.session_state.comments = ""
 
+# -------------------- USER MODE --------------------
 if mode == "User":
     st.header("Submit Feedback")
 
-    # Input fields with session state
     trainer_name = st.text_input("Trainer Name", value=st.session_state.trainer_name)
     subject_name = st.text_input("Subject Name", value=st.session_state.subject_name)
     subject_hours = st.number_input("Subject Hours", min_value=1, max_value=100, step=1, value=st.session_state.subject_hours)
@@ -77,8 +78,7 @@ if mode == "User":
                 q1, q2, q3, request_repeat, comments.strip()
             )
             st.success("Feedback submitted successfully!")
-
-            # Reset session state for new user
+            # Reset form
             st.session_state.trainer_name = ""
             st.session_state.subject_name = ""
             st.session_state.subject_hours = 1
@@ -88,30 +88,62 @@ if mode == "User":
             st.session_state.request_repeat = "Yes"
             st.session_state.comments = ""
 
+# -------------------- ADMIN MODE --------------------
 elif mode == "Admin":
-    st.header("View Feedback & Analytics")
-    df = load_data()
+    st.header("Admin Login")
 
-    if df.empty:
-        st.info("No feedback data available.")
-    else:
-        trainers = df["Trainer"].unique().tolist()
-        selected_trainer = st.selectbox("Select Trainer", trainers)
+    # Password input
+    password_input = st.text_input("Enter Admin Password", type="password")
+    admin_password = st.secrets.get("admin_password", "")
 
-        if selected_trainer:
-            trainer_data = df[df["Trainer"] == selected_trainer]
-            st.subheader(f"All Feedback for {selected_trainer}")
-            st.dataframe(trainer_data)
+    if st.button("Login"):
+        if password_input == admin_password:
+            st.success("Login successful!")
+            df = load_data()
+            if df.empty:
+                st.info("No feedback data available.")
+            else:
+                # Select trainer
+                trainers = df["Trainer"].unique().tolist()
+                selected_trainer = st.selectbox("Select Trainer", trainers)
 
-            # Analytics
-            st.subheader("Analytics")
-            avg_q1 = trainer_data["Q1"].mean()
-            avg_q2 = trainer_data["Q2"].mean()
-            avg_q3 = trainer_data["Q3"].mean()
-            repeat_count = trainer_data["Request_Repeat"].value_counts()
+                if selected_trainer:
+                    st.subheader(f"Actions for {selected_trainer}")
+                    action = st.radio("Choose Action", ["View Feedback", "Export to Excel", "View Analytics", "Delete Feedback"], horizontal=True)
 
-            st.write(f"Average Trainer Knowledge: {avg_q1:.2f}")
-            st.write(f"Average Communication Skills: {avg_q2:.2f}")
-            st.write(f"Average Engagement Level: {avg_q3:.2f}")
-            st.write("Request Repeating Trainer:")
-            st.bar_chart(repeat_count)
+                    trainer_data = df[df["Trainer"] == selected_trainer]
+
+                    if action == "View Feedback":
+                        st.dataframe(trainer_data)
+
+                    elif action == "Export to Excel":
+                        towrite = BytesIO()
+                        trainer_data.to_excel(towrite, index=False, engine='openpyxl')
+                        towrite.seek(0)
+                        st.download_button(
+                            label="Download Feedback as Excel",
+                            data=towrite,
+                            file_name=f"{selected_trainer}_feedback.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+
+                    elif action == "View Analytics":
+                        st.subheader("Analytics")
+                        avg_q1 = trainer_data["Q1"].mean()
+                        avg_q2 = trainer_data["Q2"].mean()
+                        avg_q3 = trainer_data["Q3"].mean()
+                        repeat_count = trainer_data["Request_Repeat"].value_counts()
+
+                        st.write(f"Average Trainer Knowledge: {avg_q1:.2f}")
+                        st.write(f"Average Communication Skills: {avg_q2:.2f}")
+                        st.write(f"Average Engagement Level: {avg_q3:.2f}")
+                        st.write("Request Repeating Trainer:")
+                        st.bar_chart(repeat_count)
+
+                    elif action == "Delete Feedback":
+                        if st.button("Confirm Delete"):
+                            df = df[df["Trainer"] != selected_trainer]
+                            df.to_csv(FEEDBACK_FILE, index=False)
+                            st.success(f"All feedback for {selected_trainer} has been deleted.")
+        else:
+            st.error("Incorrect password! Access denied.")
